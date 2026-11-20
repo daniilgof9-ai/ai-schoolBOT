@@ -9,12 +9,11 @@ from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, LabeledPrice, PreCheckoutQuery
 
 # ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8986640844:AAFOHa9fJ94aKibOV-cqczm0zGlXMjxHCwo") # Лучше через переменную
-WEBAPP_URL = "https://ai-school-4kxl.onrender.com"
-ADMIN_ID = 7088034758
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Берется из настроек Render
+WEBAPP_URL = "https://ai-school-4kxl.onrender.com" # Твой сайт
+ADMIN_ID = 7088034758  # Твой ID
 
 logging.basicConfig(level=logging.INFO)
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -49,12 +48,14 @@ def get_user_status(user_id):
     conn.close()
     return result[0] if result else 0
 
-# ==================== ОБРАБОТЧИКИ (Твой код без изменений) ====================
+# ==================== ОБРАБОТЧИКИ ====================
+
 @dp.message(CommandStart())
 async def start_command(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username or "друг"
     
+    # Создаем пользователя в БД, если его нет
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)', (user_id, username))
@@ -117,62 +118,6 @@ async def successful_payment(message: types.Message):
         ])
     )
 
-# ==================== ЗАПУСК БОТА В ПОТОКЕ ====================
-def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(dp.start_polling(bot))
-
-# ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
-app = Flask(__name__)
-
-@app.route('/')
-def health():
-    return "Bot is running!"
-
-if __name__ == "__main__":
-    init_db()
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    print("Бот запущен в фоне!")
-    
-    # Запускаем Flask (Render требует, чтобы порт слушался)
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-# ==================== ОПЛАТА ====================
-
-@dp.callback_query(F.data == "buy_premium")
-async def send_invoice(callback: types.CallbackQuery):
-    await callback.message.answer_invoice(
-        title="AI Школа Premium",
-        description="Полный доступ ко всем 50 урокам и 4 тестам на 30 дней.",
-        payload="premium_subscription_30d",
-        provider_token="",  # Пусто, так как это Stars
-        currency="XTR",  # XTR = Telegram Stars
-        prices=[LabeledPrice(label="Premium на 30 дней", amount=49)]
-    )
-    await callback.answer()
-
-@dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_query: PreCheckoutQuery):
-    await pre_checkout_query.answer(ok=True)
-
-@dp.message(F.successful_payment)
-async def successful_payment(message: types.Message):
-    user_id = message.from_user.id
-    set_premium(user_id, 1)
-    
-    await message.answer(
-        "✅ Оплата прошла успешно!\n\n"
-        "Твой тариф: 💎 Premium\n"
-        "Теперь тебе доступны все 50 уроков и 4 теста. Открой Mini App, чтобы начать!",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Открыть AI Школу", web_app=WebAppInfo(url=WEBAPP_URL))]
-        ])
-    )
-
 # ==================== АДМИН-ПАНЕЛЬ ====================
 
 @dp.message(F.text == "/admin")
@@ -212,12 +157,35 @@ async def give_premium(message: types.Message):
     except:
         await message.answer("Ошибка. Используй: /give_premium 123456789")
 
-# ==================== ЗАПУСК ====================
+@dp.message(F.text.startswith("/take_premium"))
+async def take_premium(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        user_id = int(message.text.split()[1])
+        set_premium(user_id, 0)
+        await message.answer(f"❌ Пользователь {user_id} больше не Premium.")
+    except:
+        await message.answer("Ошибка. Используй: /take_premium 123456789")
 
-async def main():
-    init_db()
-    print("Бот запущен!")
-    await dp.start_polling(bot)
+# ==================== ЗАПУСК БОТА В ПОТОКЕ ====================
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # handle_signals=False отключает перехват сигналов (чтобы не было ошибки в потоке)
+    loop.run_until_complete(dp.start_polling(bot, handle_signals=False))
+
+# ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
+app = Flask(__name__)
+
+@app.route('/')
+def health():
+    return "Bot is running!"
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    init_db()
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    print("Бот запущен в фоне!")
+    
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
